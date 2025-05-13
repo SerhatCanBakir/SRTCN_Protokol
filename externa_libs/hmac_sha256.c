@@ -3,8 +3,8 @@
    Originally written by https://github.com/h5p9sl
  */
 
-#include "hmac_sha256.h"
-#include "sha256.h"
+#include "./hmac_sha256.h"
+#include "./sha256.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -1,4 +1,4 @@
-#include "../include/platform.h"
+#include "platform.h"
 
 #include <winsock2.h>
 #include <WS2tcpip.h>
@@ -27,12 +27,22 @@ int platform_socket_bind(socket_t sock,char* ip,size_t len,uint16_t port){
     return 0;
 }
 
-int platform_socket_sendto(socket_t sock,const uint8_t *data,size_t len,const char *ip,uint16_t port){
-    struct sockaddr_in addr={0};
-    addr.sin_family=AF_INET;
-    addr.sin_port= htons(port);
-    inet_pton(AF_INET,ip,&addr.sin_addr);
-return sendto((SOCKET)sock,(const char*)data,(int)len,0,(struct sockaddr*)&addr,sizeof(addr));
+int platform_socket_sendto(socket_t sock, const uint8_t *data, size_t len, 
+                          const char *ip, uint16_t port) {
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    
+    if (inet_pton(AF_INET, ip, &addr.sin_addr) != 1) {
+        return -1; // Invalid IP
+    }
+
+    int sent_bytes = sendto((SOCKET)sock, (const char*)data, (int)len, 0,
+                          (struct sockaddr*)&addr, sizeof(addr));
+    if (sent_bytes == SOCKET_ERROR) {
+        return -1; // Send error
+    }
+    return sent_bytes;
 }
 
 int platform_socket_recvfrom(socket_t sock,uint8_t buf,size_t buf_len,char out_ip,uint16_t *out_port){
@@ -48,6 +58,10 @@ int platform_socket_recvfrom(socket_t sock,uint8_t buf,size_t buf_len,char out_i
 
 void platform_socket_close(socket_t sock) {
     closesocket((SOCKET)sock);
+}
+
+void platform_cleanup(){
+    WSACleanup();
 }
 
 uint64_t platform_now_ms() {

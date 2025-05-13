@@ -1,47 +1,44 @@
-// ABSULUTE CINEMA
 #ifndef SRTCN_H
 #define SRTCN_H
 
 #include <stdint.h>
-#include <stddef.h>
+#include "crypto.h"
+#include "platform.h"
+#include "message.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-
-
-#define SRTCN_MAX_PAYLOAD 1024
-#define SRTCN_MAX_PACKET 1200
-
+typedef struct sublist_node sublist_node;
 
 typedef struct {
-uint8_t data[SRTCN_MAX_PAYLOAD];
-size_t len;
-char sender_ip[64];
-uint16_t sender_port;
-}srtcn_packet_t;
+    uint8_t massage_try_time;
+    uint32_t massage_time_exp;
+} srtcn_massage_info;
 
-typedef struct{
-    const char* device_id;
-    const uint8_t hmac_key;
-    size_t hmac_key_length;
-    uint16_t bind_port;
-    char sender_ip[64];
-}srtcn_config_t;
+struct sublist_node {
+    char sub_ip[64];
+    uint16_t sub_port;
+    sublist_node *next;
+};
 
-int srtcn_init(const srtcn_config_t* config);
+typedef struct {
+    uint8_t AES_KEY[16];
+    uint8_t HMAC_KEY[32];
+    uint64_t device_id;
+    srtcn_massage_info msg_info;
+    sublist_node* firstsub;
+} srtcn_config;
 
-void srtcn_deinit();
+typedef struct {
+    socket_t sock;
+    char ip[64];  
+    uint16_t port;
+} srtcn_server_t;
 
-int srtcn_send(const char* ip,uint16_t port, const uint8_t* payload ,size_t len);
-
-int srtcn_recv(srtcn_packet_t* out_packet);
-
-uint64_t srtcn_now_ms(void)
-
-#ifdef __cplusplus
-}
-#endif
+int srtcn_init(srtcn_config config);
+int srtcn_server_init(srtcn_server_t server_info);
+int srtcn_deinit(void);
+int srtcn_add_sub(const char sub_ip[64], uint16_t port);
+int srtcn_send(srtcn_message_t msg);
+srtcn_message_t srtcn_recv(char ip[64], uint16_t *port);  
+uint64_t now_ms(void);
 
 #endif

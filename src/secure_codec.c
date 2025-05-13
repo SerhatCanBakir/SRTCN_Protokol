@@ -4,59 +4,73 @@
 #include <stdlib.h>
 #include <time.h>
 
-int srtcn_secure_encode(
-    const srtcn_message_t *msg,
-    const uint8_t *aes_key,
-    const uint8_t *hmac_key,
-    uint8_t *out_buf,
-    size_t *out_len)
-{
-    if (!msg || !aes_key || !hmac_key || !out_buf || !out_len)
+#define MAX_ENCODED_SIZE 512
+#define MIN_MSG_LENGTH 5
+
+int srtcn_secure_encode(srtcn_message_t *msg, const uint8_t *aes_key, const uint8_t *hmac_key) {
+    // Giriş kontrolü
+    if (!msg || !aes_key || !hmac_key || msg->length < MIN_MSG_LENGTH) 
         return -1;
 
-    uint8_t encoded_msg[512];
-    size_t encoded_len = 0;
+    uint8_t encoded_msg[MAX_ENCODED_SIZE];
+    size_t encoded_len = sizeof(encoded_msg);
+    
+    // Önce mesajı encode et
+    if (srtcn_encode(msg, encoded_msg, &encoded_len) != 0)
+        return -2;
 
-    int ret = srtcn_encode(msg, encoded_msg, &encoded_len);
-    if (ret != 0)
-        return ret;
+    // Buffer taşması kontrolü
+    if (msg->length + SRTCN_HMAC_SIZE > sizeof(msg->value))
+        return -3;
 
-    uint8_t encrypted_payload[512];
-    aes_encrypt(encoded_msg + 5, msg->length, aes_key, encrypted_payload);
+    uint8_t encrypted_payload[MAX_ENCODED_SIZE];
+    
+    // AES şifreleme
+    if (aes_encrypt(encoded_msg + 5, msg->length - 5, aes_key, encrypted_payload) != 0)
+        return -4;
 
-    memcpy(out_buf, encrypted_payload, msg->length);
+    // Şifrelenmiş veriyi kopyala
+    memcpy(msg->value, encrypted_payload, msg->length);
 
+    // HMAC hesapla (şifrelenmiş veri üzerinden)
     uint8_t hmac_output[SRTCN_HMAC_SIZE];
-    srtcn_hmac_sha256(hmac_key, 32, out_buf, msg->length, hmac_output);
+    if (srtcn_hmac_sha256(hmac_key, 32, msg->value, msg->length, hmac_output) != 0)
+        return -5;
 
-    memcpy(out_buf + msg->length, hmac_output, SRTCN_HMAC_SIZE);
-
-    *out_len = msg->length + SRTCN_HMAC_SIZE;
+    // HMAC'i ekle
+    memcpy(msg->value + msg->length, hmac_output, SRTCN_HMAC_SIZE);
+    msg->length += SRTCN_HMAC_SIZE;
 
     return 0;
 }
 
-int srtcn_secure_decode(
-    const uint8_t *in_buf,
-    size_t in_len,
-    const uint8_t *aes_key,
-    const uint8_t *hmac_key,
-    srtcn_message_t *out_msg)
-    {
-        if (!in_buf || in_len < (SRTCN_MAX_PAYLOAD_SIZE + SRTCN_HMAC_SIZE) || !out_msg)
+int srtcn_secure_decode(srtcn_message_t *in_msg, const uint8_t *aes_key, 
+                       const uint8_t *hmac_key, srtcn_message_t *out_msg) {
+    // Giriş kontrolü
+    if (!in_msg || !aes_key || !hmac_key || !out_msg || 
+        in_msg->length < SRTCN_HMAC_SIZE)
         return -1;
 
-    // HMAC'i kontrol et
+    size_t encrypted_len = in_msg->length - SRTCN_HMAC_SIZE;
+
+    // HMAC doğrulama
     uint8_t hmac_output[SRTCN_HMAC_SIZE];
-    srtcn_hmac_sha256(hmac_key, 32, in_buf, in_len - SRTCN_HMAC_SIZE, hmac_output);
+    if (srtcn_hmac_sha256(hmac_key, 32, in_msg->value, encrypted_len, hmac_output) != 0)
+        return -2;
 
-    if (memcmp(hmac_output, in_buf + in_len - SRTCN_HMAC_SIZE, SRTCN_HMAC_SIZE) != 0)
-        return -2;  // HMAC doğrulaması başarısız
+    if (memcmp(hmac_output, in_msg->value + encrypted_len, SRTCN_HMAC_SIZE) != 0)
+        return -3; // HMAC uyuşmazlığı
 
-    // HMAC doğrulandı, şifreyi çöz
-    uint8_t decrypted_payload[512];
-    aes_decrypt(in_buf, in_len - SRTCN_HMAC_SIZE, aes_key, decrypted_payload);
+    // Şifre çözme
+    uint8_t decrypted_payload[MAX_ENCODED_SIZE];
+    if (aes_decrypt(in_msg->value, encrypted_len, aes_key, decrypted_payload) != 0)
+        return -4;
 
-    // Mesajı çöz
-    return srtcn_decode(decrypted_payload, in_len - SRTCN_HMAC_SIZE, out_msg);
-    }
+    // Çıktıyı hazırla
+    out_msg->type = in_msg->type;
+    out_msg->massage_id = in_msg->massage_id;
+    out_msg->length = encrypted_len;
+    memcpy(out_msg->value, decrypted_payload, encrypted_len);
+
+    return 0;
+}

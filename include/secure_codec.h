@@ -3,24 +3,22 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "message.h"  // srtcn_message_t
-#include "crypto.h"   // AES ve HMAC fonksiyonlarını burada kullanacağız
+#include "message.h"
+#include "crypto.h"
 
-// Güvenli encode fonksiyonu: Mesajı şifreleyip çıkartır
+typedef struct srtcn_message_t srtcn_message_t;
+
+
 int srtcn_secure_encode(
-    const srtcn_message_t *msg,
-    const uint8_t *aes_key,
-    const uint8_t *hmac_key,
-    uint8_t *out_buf,
-    size_t *out_len
+    srtcn_message_t *msg,
+    const uint8_t aes_key[16],  // AES-128 için
+    const uint8_t hmac_key[32]  // HMAC-SHA256 için
 );
 
-// Güvenli decode fonksiyonu: Şifreli mesajı çözer
 int srtcn_secure_decode(
-    const uint8_t *in_buf,
-    size_t in_len,
-    const uint8_t *aes_key,
-    const uint8_t *hmac_key,
+    srtcn_message_t *in_msg,
+    const uint8_t aes_key[16],
+    const uint8_t hmac_key[32],
     srtcn_message_t *out_msg
 );
 
