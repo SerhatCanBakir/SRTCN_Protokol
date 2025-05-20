@@ -20,63 +20,72 @@ int srtcn_hmac_sha256(const uint8_t *key, size_t key_len,
 }
 
 int aes_encrypt(const uint8_t *input, size_t input_len, 
-               const uint8_t *key, uint8_t *output) {
-    // Giriş kontrolü
+                const uint8_t *key, uint8_t *output) {
     if (!input || !key || !output || input_len == 0)
         return -1;
 
-    // Sabit boyutlu buffer kullanımı
     uint8_t padded_input[MAX_BUFFER_SIZE];
-    size_t padded_len = input_len;
-    uint8_t pad_value = AES_BLOCK_SIZE - (input_len % AES_BLOCK_SIZE);
+    uint8_t iv[AES_BLOCK_SIZE];
+    size_t padded_len;
+    uint8_t pad_value;
 
-    // Buffer taşması kontrolü
-    if (input_len + pad_value > MAX_BUFFER_SIZE)
+    // Padding
+    pad_value = AES_BLOCK_SIZE - (input_len % AES_BLOCK_SIZE);
+    if (pad_value == 0) pad_value = AES_BLOCK_SIZE;
+    padded_len = input_len + pad_value;
+
+    if (padded_len > MAX_BUFFER_SIZE)
         return -2;
 
     memcpy(padded_input, input, input_len);
-    
-    // Padding ekle
-    if (pad_value != AES_BLOCK_SIZE) {
-        padded_len += pad_value;
-        memset(padded_input + input_len, pad_value, pad_value);
-    }
+    memset(padded_input + input_len, pad_value, pad_value);
 
-    // Şifreleme
+    // Rastgele IV üret (örneğin Windows için)
+    for (int i = 0; i < AES_BLOCK_SIZE; i++)
+        iv[i] = rand() % 256;
+
+    // CBC başlat
     struct AES_ctx ctx;
-    uint8_t iv[AES_BLOCK_SIZE] = {0}; // Basit IV
     AES_init_ctx_iv(&ctx, key, iv);
     AES_CBC_encrypt_buffer(&ctx, padded_input, padded_len);
-    
-    memcpy(output, padded_input, padded_len);
-    return 0;
+
+    // IV + Ciphertext olarak output'a yaz
+    memcpy(output, iv, AES_BLOCK_SIZE);
+    memcpy(output + AES_BLOCK_SIZE, padded_input, padded_len);
+
+    return AES_BLOCK_SIZE + padded_len;
 }
 
 int aes_decrypt(const uint8_t *input, size_t input_len,
-               const uint8_t *key, uint8_t *output) {
-    // Giriş kontrolü
+                const uint8_t *key, uint8_t *output) {
     if (!input || !key || !output || 
-        input_len == 0 || input_len % AES_BLOCK_SIZE != 0 ||
+        input_len <= AES_BLOCK_SIZE || 
+        (input_len - AES_BLOCK_SIZE) % AES_BLOCK_SIZE != 0 ||
         input_len > MAX_BUFFER_SIZE)
         return -1;
 
-    // Sabit boyutlu buffer kullanımı
+    const uint8_t *iv = input;
+    const uint8_t *ciphertext = input + AES_BLOCK_SIZE;
+    size_t ciphertext_len = input_len - AES_BLOCK_SIZE;
+
     uint8_t temp_output[MAX_BUFFER_SIZE];
-    
-    memcpy(temp_output, input, input_len);
-    
-    // Şifre çözme
+    memcpy(temp_output, ciphertext, ciphertext_len);
+
     struct AES_ctx ctx;
-    uint8_t iv[AES_BLOCK_SIZE] = {0}; // IV (encode ile aynı olmalı)
     AES_init_ctx_iv(&ctx, key, iv);
-    AES_CBC_decrypt_buffer(&ctx, temp_output, input_len);
-    
-    // Padding kontrolü (basit)
-    uint8_t pad_size = temp_output[input_len - 1];
-    if (pad_size > AES_BLOCK_SIZE) {
-        return -2; // Geçersiz padding
+    AES_CBC_decrypt_buffer(&ctx, temp_output, ciphertext_len);
+
+    // PKCS#7 padding doğrulama
+    uint8_t pad_value = temp_output[ciphertext_len - 1];
+    if (pad_value == 0 || pad_value > AES_BLOCK_SIZE)
+        return -2;
+
+    for (size_t i = 0; i < pad_value; ++i) {
+        if (temp_output[ciphertext_len - 1 - i] != pad_value)
+            return -3; // Hatalı padding
     }
-    
-    memcpy(output, temp_output, input_len - pad_size);
-    return 0;
+
+    size_t plain_len = ciphertext_len - pad_value;
+    memcpy(output, temp_output, plain_len);
+    return (int)plain_len;
 }

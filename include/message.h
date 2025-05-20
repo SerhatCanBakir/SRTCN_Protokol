@@ -9,7 +9,7 @@
 #define SRTCN_MAX_PAYLOAD_SIZE 256
 #define SRTCN_TYPE_DATA 0
 #define SRTCN_TYPE_ACK 1
-
+#define SRTCN_TYPE_HEARTBEAT 2 
 typedef struct srtcn_message_t
 {
     uint16_t massage_id;

@@ -33,12 +33,6 @@ typedef struct {
     uint16_t port;
 } srtcn_server_t;
 
-int srtcn_init(srtcn_config config);
-int srtcn_server_init(srtcn_server_t server_info);
-int srtcn_deinit(void);
-int srtcn_add_sub(const char sub_ip[64], uint16_t port);
-int srtcn_send(srtcn_message_t msg);
-srtcn_message_t srtcn_recv(char ip[64], uint16_t *port);  
-uint64_t now_ms(void);
+
 
 #endif
