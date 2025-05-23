@@ -3,173 +3,183 @@
 #include <string.h>
 #include <stdio.h>
 
-static srtcn_config global_config;
-static srtcn_server_t global_server;
-
-int srtcn_init(srtcn_config config)
-{
-    // AES_KEY kontrolü ve kopyalama
-    if (config.AES_KEY == NULL) {
-        printf("Error: AES_KEY is required\n");
-        return 1;
-    }
-    memcpy(global_config.AES_KEY, config.AES_KEY, sizeof(global_config.AES_KEY));
-
-    // HMAC_KEY kontrolü ve kopyalama
-    if (config.HMAC_KEY == NULL) {
-        printf("Error: HMAC_KEY is required\n");
-        return 1;
-    }
-    memcpy(global_config.HMAC_KEY, config.HMAC_KEY, sizeof(global_config.HMAC_KEY));
-
-    // Device ID kopyalama
-    global_config.device_id = config.device_id;
-
-    // Mesaj bilgileri kopyalama
-    if (config.msg_info.massage_time_exp == 0 || config.msg_info.massage_try_time == 0) {
-        printf("Warning: Message info not fully configured\n");
-    }
-    global_config.msg_info = config.msg_info;
-
-    // Bağlantılı liste başlatıcı
-    global_config.firstsub = NULL;
-
-    return 0;
-}
-
-int srtcn_server_init(srtcn_server_t server_info)
+int server_init(void)
 {
     platform_init();
-    
-    // Sunucu bilgilerini kopyala
-    global_server.port = server_info.port;
-    strncpy(global_server.ip, server_info.ip, sizeof(global_server.ip) - 1);
-    global_server.ip[sizeof(global_server.ip) - 1] = '\0';
+    return 0;
+}
 
-    // Soket oluştur ve bağla
-    global_server.sock = platform_socket_create();
-    if (platform_socket_bind(global_server.sock, global_server.ip, 
-                           (uint16_t)strlen(global_server.ip), global_server.port) != 0) {
-        printf("Error: Binding failed\n");
-        platform_socket_close(global_server.sock);
-        return 1;
+srtcn_config_t *config_init(
+    char *aes_key,
+    char *hmac_key)
+{
+    srtcn_config_t *config = malloc(sizeof(srtcn_config_t));
+    if (!config)
+        return NULL;
+
+    memcpy(config->AES_KEY, aes_key, sizeof(uint8_t)*16); // Sabit uzunluk kullanılmalı
+    memcpy(config->HMAC_KEY, hmac_key,sizeof(uint8_t)*32);
+    config->sub = NULL; // Varsayılan olarak boş başla
+    return config;
+}
+
+int start_server(socket_t *sock, const char *ip, uint16_t port) {
+    *sock = platform_socket_create();
+
+    if (platform_socket_set_reuseaddr(*sock) != 0) {
+        platform_socket_close(*sock);
+        return -1;
+    }
+
+    if (platform_socket_bind(*sock, ip,strlen(ip), port) != 0) {
+        platform_socket_close(*sock);
+        return -1;
     }
 
     return 0;
 }
 
-int srtcn_deinit(void)
+int closeServer(
+    socket_t sock)
 {
-    // Bağlantılı listeyi temizle
-    sublist_node *current = global_config.firstsub;
-    while (current != NULL) {
-        sublist_node *next = current->next;
-        free(current);
-        current = next;
-    }
-    global_config.firstsub = NULL;
-
-    // Soketi kapat
-    if (global_server.sock != NULL) {
-        platform_socket_close(global_server.sock);
-    }
-    
+    platform_socket_close(sock);
     platform_cleanup();
     return 0;
 }
 
-int srtcn_add_sub(const char sub_ip[64], uint16_t port)
+int addAckSettings(
+    srtcn_config_t *config,
+    uint8_t sendCount,
+    uint32_t exp_time)
 {
-    if (sub_ip == NULL) {
-        return 1;
+    if (!config)
+        return -1;
+    AckSettings ack = {0};
+    ack.exp_time = exp_time;
+    ack.sendCount = sendCount;
+    config->acksetting = ack;
+    return 0;
+}
+
+int addsub(
+    srtcn_config_t *config,
+    char *ipaddr,
+    uint16_t port)
+{
+    if (!config || !ipaddr) return -1;
+
+    Sublist *newsub = malloc(sizeof(Sublist));
+    if (!newsub) return -1;
+
+    // IP adresi buffer'a kopyalanıyor, taşma önleniyor
+    strncpy(newsub->ip, ipaddr, sizeof(newsub->ip) - 1);
+    newsub->ip[sizeof(newsub->ip) - 1] = '\0';
+
+    newsub->port = port;
+    newsub->next = NULL;
+
+    if (config->sub == NULL)
+    {
+        config->sub = newsub;
     }
-
-    sublist_node *node = malloc(sizeof(sublist_node));
-    if (node == NULL) {
-        return 1;
-    }
-
-    strncpy(node->sub_ip, sub_ip, sizeof(node->sub_ip) - 1);
-    node->sub_ip[sizeof(node->sub_ip) - 1] = '\0';
-    node->sub_port = port;
-    node->next = NULL;
-
-    if (global_config.firstsub == NULL) {
-        global_config.firstsub = node;
-    } else {
-        sublist_node *current = global_config.firstsub;
-        while (current->next != NULL) {
-            current = current->next;
+    else
+    {
+        Sublist *holder = config->sub;
+        while (holder->next != NULL)
+        {
+            holder = holder->next;
         }
-        current->next = node;
+        holder->next = newsub;
     }
 
     return 0;
 }
 
-int srtcn_send(srtcn_message_t msg) {
-    uint8_t out_buff[2048]; // Increased buffer size
-    size_t out_buff_size = sizeof(out_buff);
+int removeSub(
+    srtcn_config_t *config,
+    char *ipaddr,
+    uint16_t port)
+{
+    if (!config || !config->sub)
+        return -1;
 
-    if (srtcn_secure_encode(&msg, global_config.AES_KEY, global_config.HMAC_KEY) != 0) {
-        return 1;
+    Sublist *holder = config->sub;
+
+    // Özel durum: ilk eleman eşleşirse
+    if (strcmp(holder->ip, ipaddr) == 0 && holder->port == port)
+    {
+        config->sub = holder->next;
+        free(holder);
+        return 0;
     }
 
-    if (srtcn_encode(&msg, out_buff, &out_buff_size) != 0) {
-        return 1;
+    while (holder->next && (strcmp(holder->next->ip, ipaddr) || holder->next->port != port))
+    {
+        holder = holder->next;
     }
 
-    sublist_node *node = global_config.firstsub;
-    while (node != NULL) {
-        if (platform_socket_sendto(global_server.sock, out_buff, out_buff_size,
-                                 node->sub_ip, node->sub_port) < 0) {
-            // Log error but continue with other subscribers
-            perror("Sendto failed");
-        }
-        node = node->next;
+    if (!holder->next)
+        return -1; // Bulunamadı
+
+    Sublist *toDelete = holder->next;
+    holder->next = toDelete->next;
+    free(toDelete);
+    return 0;
+}
+
+int sendMessage(
+    srtcn_config_t *config,
+    socket_t sock,
+    srtcn_message_t msg)
+{
+    if (!!config)
+        return -1;
+
+    if (!srtcn_secure_encode(&msg, config->AES_KEY, config->HMAC_KEY))
+        return -1;
+
+    uint8_t buff[SRTCN_MAX_PAYLOAD_SIZE];
+    int buffsize = sizeof(buff);
+
+    if (!srtcn_encode(&msg, buff, buffsize))
+        return -2;
+
+    Sublist *subs = config->sub;
+    while (subs != NULL)
+    {
+        platform_socket_sendto(sock, buff, buffsize, subs->ip, subs->port);
+        subs = subs->next;
     }
 
     return 0;
 }
 
-srtcn_message_t srtcn_recv(char ip[64], uint16_t *port)
+srtcn_message_t recvMessage(
+    srtcn_config_t *config,
+    socket_t sock)
 {
-    uint8_t out_buff[512];
-    size_t out_buff_len = sizeof(out_buff);
-    srtcn_message_t msg_in, msg_out;
-    char temp_ip[64];
-    uint16_t temp_port;
+    srtcn_message_t newMsg = {0}, newMsg2 = {0};
+    if (!config)
+        return newMsg2;
 
-    // Veriyi al
-    if (platform_socket_recvfrom(global_server.sock, out_buff, &out_buff_len, 
-                               temp_ip, &temp_port) != 0) {
-        memset(&msg_out, 0, sizeof(msg_out));
-        return msg_out;
-    }
+    uint8_t buff[SRTCN_MAX_PAYLOAD_SIZE];
+    char ip[64] = {0};
+    uint16_t port = 0;
 
-    // IP ve port bilgisini kopyala
-    if (ip != NULL) {
-        strncpy(ip, temp_ip, 64);
-    }
-    if (port != NULL) {
-        *port = temp_port;
-    }
+    int recvsize = platform_socket_recvfrom(sock, buff, SRTCN_MAX_PAYLOAD_SIZE, ip, &port);
+    if (recvsize <= 0)
+        return newMsg2;
 
-    // Mesajı çöz
-    if (srtcn_decode(out_buff, out_buff_len, &msg_in) != 0) {
-        memset(&msg_out, 0, sizeof(msg_out));
-        return msg_out;
-    }
+    if (!srtcn_decode(buff, recvsize, &newMsg))
+        return newMsg2;
 
-    // Güvenli çözme
-    if (srtcn_secure_decode(&msg_in, global_config.AES_KEY, global_config.HMAC_KEY, &msg_out) != 0) {
-        memset(&msg_out, 0, sizeof(msg_out));
-    }
+    if (!srtcn_secure_decode(&newMsg, config->AES_KEY, config->HMAC_KEY, &newMsg2))
+        return newMsg2;
 
-    return msg_out;
+    return newMsg2;
 }
 
-uint64_t now_ms(void)
+uint64_t getTime()
 {
     return platform_now_ms();
 }

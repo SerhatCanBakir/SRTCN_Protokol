@@ -10,7 +10,7 @@
 int srtcn_secure_encode(srtcn_message_t *msg, const uint8_t *aes_key, const uint8_t *hmac_key)
 {
     // Data validation
-    if (!msg || !aes_key || !hmac_key || msg->length < MIN_MSG_LENGTH)
+    if (!msg || !aes_key || !hmac_key )
         return -1;
 
     // HMAC_ENCRYPTİON

@@ -1,83 +1,100 @@
 #include <stdio.h>
 #include <string.h>
+#include <windows.h> // sleep için
+
 #include "srtcn.h"
+#include <stdio.h>
+
+void print_config(srtcn_config_t *config) {
+    if (!config) {
+        printf("Config pointer is NULL.\n");
+        return;
+    }
+
+    printf("========== SRTCN CONFIG ==========\n");
+    printf("AES_KEY    : %s\n", config->AES_KEY);
+    printf("HMAC_KEY   : %s\n", config->HMAC_KEY);
+    printf("AckSettings:\n");
+    printf("  SendCount: %u\n", config->acksetting.sendCount);
+    printf("  Expiry   : %u ms\n", config->acksetting.exp_time);
+
+    printf("Subscribers:\n");
+    Sublist *cur = config->sub;
+    int i = 0;
+    while (cur != NULL) {
+        printf("  [%d] IP: %s, Port: %u\n", i++, cur->ip, cur->port);
+        cur = cur->next;
+    }
+    if (i == 0) {
+        printf("  (no subscribers)\n");
+    }
+
+    printf("==================================\n");
+}
 
 int main(int argc, char **argv)
 {
-    // 1. Initialize configuration
-    srtcn_config newConfig = {0}; // Zero initialize the struct
+    // 1. Init configuration
+    char *aeskey = "random_aes_key";
+    char *hmackey = "random_hmac_key";
 
-    // AES key should be exactly 16 bytes for AES-128
-    const char aeskey[16] = "MY_SECRET_AES__"; // 16 characters exactly
-    memcpy(newConfig.AES_KEY, aeskey, sizeof(newConfig.AES_KEY));
+    srtcn_config_t *config = config_init(aeskey, hmackey);
 
-    // HMAC key should be exactly 32 bytes for SHA-256
-    const char hmackey[32] = "MY_SECRET_HMAC_KEY_1234567890_";
-    memcpy(newConfig.HMAC_KEY, hmackey, sizeof(newConfig.HMAC_KEY));
+    server_init();
+    printf("server_init worked\n");
 
-    newConfig.device_id = 1;
-
-    // Set message info
-    newConfig.msg_info.massage_try_time = 3;    // Example retry count
-    newConfig.msg_info.massage_time_exp = 5000; // 5 second timeout
-
-    // 2. Initialize SRTCN
-    if (srtcn_init(newConfig))
+    socket_t sock;
+    if (start_server(&sock, "127.0.0.1", 3001) != 0)
     {
-        fprintf(stderr, "Failed to initialize SRTCN\n");
+        fprintf(stderr, "Server failed to start.\n");
         return 1;
     }
-printf("init yapıldı");
-    // 3. Initialize server
-    srtcn_server_t newServer = {0};
-    strncpy(newServer.ip, "127.0.0.1", sizeof(newServer.ip) - 1);
-    newServer.ip[sizeof(newServer.ip) - 1] = '\0'; // Ensure null termination
-    newServer.port = 3001;                         // Fixed port assignment
+    printf("start_server worked\n");
 
-    if (srtcn_server_init(newServer))
+    addAckSettings(config, 3, 300); // ACK için 3 tekrar, 300ms expire
+    printf("add_ack_settings worked\n");
+
+    // Burada bu sunucuya cevap göndermesi beklenen diğer sunuculara sub eklenmeli (örneğin publisher)
+    if (addsub(config, "127.0.0.1", 3000) != 0)
     {
-        fprintf(stderr, "Failed to initialize server\n");
-        srtcn_deinit();
+        fprintf(stderr, "addsub failed.\n");
         return 1;
     }
-printf("server açıldı");
-    // 4. Add publisher as subscriber (reverse of publisher example)
-    if (srtcn_add_sub("127.0.0.1", 3000))
+    printf("addSub worked\n");
+   print_config(config);
+   
+   while (1)
+   {
+    srtcn_message_t recvmsg = recvMessage(config, sock);
+    
+    printf("GELEN MESAJ:\n");
+    printf("message_id: %d\n", recvmsg.massage_id);
+    printf("type: %d\n", recvmsg.type);
+    printf("length: %d\n", recvmsg.length);
+    printf("value: %s\n", (char *)recvmsg.value);
+    
+    if (recvmsg.type == SRTCN_TYPE_DATA)
     {
-        fprintf(stderr, "Failed to add publisher as subscriber\n");
-    }
-printf("sub eklendi");
-    // 5. Receive message
-    char sender_ip[64] = "127.0.0.1";
-    uint16_t sender_port = 3000; 
-    srtcn_message_t received = srtcn_recv(sender_ip, &sender_port);
-printf("mesaj gitti");
-    printf("Received message from %s:%d\n", sender_ip, sender_port);
-    printf("Message ID: %d\nType: %d\nLength: %d\nValue: %.*s\n",
-           received.massage_id,
-           received.type,
-           received.length,
-           received.length,
-           received.value);
-
-    // 6. Send ACK
-    srtcn_message_t ackMessage = {0};
-    ackMessage.massage_id = received.massage_id; // Echo back the received ID
-    ackMessage.type = 1;                         // ACK type
-    ackMessage.length = sizeof(received.massage_id);
-    memcpy(ackMessage.value, &received.massage_id, sizeof(received.massage_id));
-
-    if (srtcn_send(ackMessage)!=0)
-    {
-        fprintf(stderr, "Failed to send ACK\n");
-    }
-    else
-    {
-        printf("Sent ACK for message ID %d\n", received.massage_id);
+        srtcn_message_t ack;
+        ack.massage_id = recvmsg.massage_id; // aynı ID ile cevap ver
+        ack.type = SRTCN_TYPE_ACK;
+        ack.length = 0; // payload yok
+        memset(ack.value, 0, sizeof(ack.value));
+        
+        if (sendMessage(config, sock, ack) != 0)
+        {
+                fprintf(stderr, "ACK sendMessage failed\n");
+            }
+            else
+            {
+                printf("ACK gönderildi\n");
+            }
+        }
+        
+        Sleep(1); // test amaçlı 1 saniye bekle
     }
 
-    // 7. Cleanup
-    srtcn_deinit();
-
+    
+    closeServer(sock);
     return 0;
 }
